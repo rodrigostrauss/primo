@@ -2,6 +2,7 @@ import subprocess
 import time
 import os
 import functools
+import traceback
 from heapq import heappop, heappush
 
 
@@ -32,6 +33,9 @@ class Process(object):
         #
         self.process_obj = None
         self.primo = primo
+
+    def __repr__(self):
+        return '<Process bin=%s>' % self.bin
 
     def add_listener(self, c):
         self.listeners.append(c)
@@ -88,6 +92,30 @@ class ScheduleCallbackInfo(object):
                else '%s %s' % (self.callback.func, self.callback.args)
         return '<ScheduleCallbackInfo: when=%02d:%02d:%02d, callback=%s>' % (t.tm_hour, t.tm_min, t.tm_sec, func)
 
+        
+def warn_if_dying(meth):
+    def new(*args, **kwargs):
+        if args[0].dying: # assuming args[0] is the self param
+            print 'WARNING: Not supposed to happen when primo is dying.', \
+                'Callbacks scheduled when primo is dying will never be executed. Stack: \n"'
+            traceback.print_list(traceback.extract_stack())
+            
+        return meth(*args, **kwargs)
+
+    return new    
+'''
+class warn_if_dying(object):
+    def __init__(self, x):
+        self.x = x
+    
+    def __call__(self, *args, **kwargs):
+        if args[0].dying: # assuming args[0] is a primo self
+            print 'WARNING: action not supposed to happen when primo is dying: function="%s", params="%s"' \
+              % (self.x, args)
+
+        return self.x(*args, **kwargs)
+'''
+
 class Primo(object):
     def __init__(self):
         self.processes = []
@@ -95,15 +123,18 @@ class Primo(object):
         self.schedule = []
         self.global_listeners = []
         self.scheduling_log = False
+        self.dying = False
 
+    #@warn_if_dying
     def add_global_listener(self, listener):
         self.global_listeners.append(listener)
-        
+
+    #@warn_if_dying    
     def add_process(self, process):
         self.processes.append(process)
         for c in self.global_listeners:
             process.add_listener(c)
-
+            
     def schedule_callback(self, callback, delay):
         when = time.time() + delay
         info = ScheduleCallbackInfo(when, callback)
@@ -198,11 +229,16 @@ class Primo(object):
                 print 'exception on main loop: %s' % (repr(ex),)
                 break
 
+
+        self.dying = True            
+
         #
         # MUST be a raise, we're already out of run loop
         #
         self.raise_global_event('before_detach')
 
+'''
+    Here for sake of history. You can do all this stuff using RunCodeOnEventPlugin
 
 def KillOnDetach(event, primo, process):
     if event == 'before_detach':
@@ -219,6 +255,8 @@ def AutoStartPlugin(event, primo, process):
 def LogEventsPlugin(event, primo, process):
     print 'process "%s", event="%s"' % (process.bin, event)
 
+'''
+
 def FinishMonitorPlugin(event, primo, process):
     if event == 'after_start':
         primo.post_timer_event(process, FinishMonitorPlugin, 1) 
@@ -229,19 +267,57 @@ def FinishMonitorPlugin(event, primo, process):
             primo.raise_process_event('after_finish', process)
             return
 
-        primo.post_timer_event(process, FinishMonitorPlugin, 1)         
+        primo.post_timer_event(process, FinishMonitorPlugin, 1)
+
+class StringCodeAdapter(object):
+    def __init__(self, string_code):
+        self.func = compile(string_code, '<string>', 'exec')
+        
+    def __call__(self, event, primo, process):
+        globals = {'event': event, 'primo' : primo, 'process' : process, 'ret' : None}
+        exec self.func in globals
+        return globals['ret']
+
+class ProcessMethodAdapter(object):
+    def __init__(self, process_method):
+        self.process_method = process_method
+        
+    def __call__(self, event, primo, process):
+        self.process_method(process)
+
+class RunCodeOnEventPlugin(object):
+    def __init__(self, event_filter, func):
+        self.func = func
+        if isinstance(event_filter, str):
+            self.event_filter = [event_filter]
+        else:
+            self.event_filter = event_filter
+
+    def __call__(self, event, primo, process):
+        if not self.event_filter or event in self.event_filter:
+            return self.func(event, primo, process)
 
     
 def Test():
     primo = Primo()
     p = Process(primo)
 
-    primo.add_global_listener(AutoStartPlugin)
-    primo.add_global_listener(LogEventsPlugin)
-    primo.add_global_listener(FinishMonitorPlugin)
+    primo.add_global_listener(FinishMonitorPlugin)    
 
-    p.add_listener(KeepRunningPlugin)
-    p.add_listener(KillOnDetach)
+    # auto start and relauch always
+    primo.add_global_listener(
+        RunCodeOnEventPlugin(['after_attach', 'after_finish'],
+            ProcessMethodAdapter(Process.Start)))
+
+    # log all events
+    primo.add_global_listener(
+        RunCodeOnEventPlugin(None,
+            StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)')))
+
+    # kill on detach
+    primo.add_global_listener(
+        RunCodeOnEventPlugin('before_detach',
+                             ProcessMethodAdapter(Process.KillNow)))
 
     p.path = 'c:\\windows'
     p.bin = 'notepad.exe'
