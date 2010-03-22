@@ -3,6 +3,7 @@ import time
 import os
 import functools
 import traceback
+import xml.sax
 from heapq import heappop, heappush
 
 
@@ -272,11 +273,15 @@ def FinishMonitorPlugin(event, primo, process):
 class StringCodeAdapter(object):
     def __init__(self, string_code):
         self.func = compile(string_code, '<string>', 'exec')
+        self.string_code = string_code
         
     def __call__(self, event, primo, process):
         globals = {'event': event, 'primo' : primo, 'process' : process, 'ret' : None}
         exec self.func in globals
         return globals['ret']
+
+    def __repr__(self):
+        return '<StringCodeAdapter string_code="%s">'% self.string_code
 
 class ProcessMethodAdapter(object):
     def __init__(self, process_method):
@@ -285,11 +290,14 @@ class ProcessMethodAdapter(object):
     def __call__(self, event, primo, process):
         self.process_method(process)
 
+    def __repr__(self):
+        return '<ProcessMethodAdapter method="%s">'% self.process_method
+
 class RunCodeOnEventPlugin(object):
     def __init__(self, event_filter, func):
         self.func = func
-        if isinstance(event_filter, str):
-            self.event_filter = [event_filter]
+        if isinstance(event_filter, basestring):
+            self.event_filter = [str(event_filter)]
         else:
             self.event_filter = event_filter
 
@@ -297,8 +305,135 @@ class RunCodeOnEventPlugin(object):
         if not self.event_filter or event in self.event_filter:
             return self.func(event, primo, process)
 
+    def __repr__(self):
+        return '<RunCodeOnEventPlugin filter="%s", code="%s">'% (self.event_filter, self.func)
+
+
+
+test_xml = \
+'''
+<Primo>
+ <GlobalListeners>
+  <EventLogger/>
+  <KillOnDetach/>
+ </GlobalListeners>
+ 
+ <Process path="c:\windows" bin="notepad.exe">
+  <OnEvent event="after_attach" action="{process.Start()}"/>
+ </Process>
+</Primo>
+'''
+
+class XmlConfigParser(xml.sax.handler.ContentHandler):
+    def __init__(self):
+        self.element_handlers = {}
+        self.element_handlers['Primo'] = self._PrimoElement
+        self.element_handlers['GlobalListeners'] = self._GlobalListenersElement
+        self.element_handlers['Process'] = self._ProcessElement
+        self.element_handlers['OnEvent'] = self._OnEventElement
+
+        self.listeners = {}
+        self.listeners['EventLogger'] = \
+            lambda name, attrs: RunCodeOnEventPlugin(None,
+                StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)'))
+
+        self.listeners['KillOnDetach'] = \
+            lambda name, attrs: RunCodeOnEventPlugin('before_detach', ProcessMethodAdapter(Process.KillNow)) 
+        
+        self.context_stack = []
+
+        self.primo = None
+
+    def _push_current_handler(self):
+        self._push_handler(self.context_stack[-1].handler)
+                           
+    def _push_handler(self, handler, pop_on_end = True):
+        class ElementHandlerInfo:
+            pass
+
+        eh = ElementHandlerInfo()
+        eh.handler = handler
+        eh.pop_on_end = pop_on_end
+        self.context_stack.append(eh)
+
+    def _pop_handler(self):
+        self.context_stack.pop(-1)
+
+    def _call_current_handler(self, name, attrs):
+        self.context_stack[-1].handler(name, attrs)
+
+    #
+    # Element handlers
+    #
+    def _PrimoElement(self, name, attrs):
+        self._push_current_handler()
+
+    def _OnEventElement(self, name, attrs):
+        event = attrs['event']
+        action = attrs['action']
+        action = action.strip('{}')
+        return RunCodeOnEventPlugin(event, StringCodeAdapter(action))
+        
+
+    def _GlobalListenersElement(self, name, attrs):
+        def add_global_listener(name, attrs):
+            self.primo.add_global_listener(self.listeners[name](name, attrs))
+
+        self._push_handler(add_global_listener, pop_on_end = True)
+
+    def _ProcessElement(self, name, attrs):
+        p = Process(self.primo)
+        p.path = attrs['path']
+        p.bin = attrs['bin']
+
+        self.primo.add_process(p)
+
+        def add_process_listener(name, attrs):
+            if name == 'OnEvent':
+                listener = self._OnEventElement(name, attrs)
+            else:
+                listener = self.listeners[name](name, attrs)
+
+            p.add_listener(listener)
+
+        self._push_handler(add_process_listener)            
+
+    def _SimpleElementRouter(self, name, attrs):
+        self.element_handlers[name](name, attrs)
+
+    def parse_string(self, string):
+        xml.sax.parseString(string, self)
+        return self.primo
+
+    #
+    # SAX handlers
+    #
+
+    def startDocument(self):
+        self.primo = Primo()
+        self._push_handler(self._SimpleElementRouter, pop_on_end=True)
+
+    def endElement(self, name):
+        #if self.context_stack[-1].pop_on_end:
+        self._pop_handler()
+
+    def _not_supposed_to_have_children(self, name, attrs):
+        assert False
+        
+    def startElement(self, name, attrs):
+        x = len(self.context_stack)
+        
+        self._call_current_handler(name, attrs)
+
+        if len(self.context_stack) == x:        
+            self._push_handler(self._not_supposed_to_have_children, True)
+
     
 def Test():
+    x = XmlConfigParser()
+    primo = x.parse_string(test_xml)
+
+    
     primo = Primo()
     p = Process(primo)
 
