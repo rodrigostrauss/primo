@@ -1,10 +1,12 @@
 import subprocess
 import time
 import os
+import sys
 import functools
 import traceback
 import xml.sax
 from heapq import heappop, heappush
+from pprint import pprint
 
 
 def path_join(a, *args):
@@ -42,7 +44,8 @@ class Process(object):
         self.listeners.append(c)
 
     def StartNow(self):
-        command_line = path_join(self.path, self.bin)
+        command_line = path_join(self.path, self.bin).encode(sys.getfilesystemencoding())
+        
         params = ' '.join(self.command_line_parameters)
 
         self.primo.raise_process_event('before_start', self, 'after_start_cancel')
@@ -125,6 +128,10 @@ class Primo(object):
         self.global_listeners = []
         self.scheduling_log = False
         self.dying = False
+        self.initialize_global_listeners()
+
+    def initialize_global_listeners(self):
+        self.add_global_listener(FinishMonitorPlugin)
 
     #@warn_if_dying
     def add_global_listener(self, listener):
@@ -347,13 +354,12 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
     def _push_current_handler(self):
         self._push_handler(self.context_stack[-1].handler)
                            
-    def _push_handler(self, handler, pop_on_end = True):
+    def _push_handler(self, handler):
         class ElementHandlerInfo:
             pass
 
         eh = ElementHandlerInfo()
         eh.handler = handler
-        eh.pop_on_end = pop_on_end
         self.context_stack.append(eh)
 
     def _pop_handler(self):
@@ -377,9 +383,14 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def _GlobalListenersElement(self, name, attrs):
         def add_global_listener(name, attrs):
-            self.primo.add_global_listener(self.listeners[name](name, attrs))
+            if name == 'OnEvent':
+                listener = self._OnEventElement(name, attrs)
+            else:
+                listener = self.listeners[name](name, attrs)
+                
+            self.primo.add_global_listener(listener)
 
-        self._push_handler(add_global_listener, pop_on_end = True)
+        self._push_handler(add_global_listener)
 
     def _ProcessElement(self, name, attrs):
         p = Process(self.primo)
@@ -401,6 +412,10 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
     def _SimpleElementRouter(self, name, attrs):
         self.element_handlers[name](name, attrs)
 
+    def parse_file(self, file_name):
+        xml.sax.parse(file_name, self)
+        return self.primo        
+
     def parse_string(self, string):
         xml.sax.parseString(string, self)
         return self.primo
@@ -411,7 +426,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def startDocument(self):
         self.primo = Primo()
-        self._push_handler(self._SimpleElementRouter, pop_on_end=True)
+        self._push_handler(self._SimpleElementRouter)
 
     def endElement(self, name):
         #if self.context_stack[-1].pop_on_end:
@@ -426,13 +441,10 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self._call_current_handler(name, attrs)
 
         if len(self.context_stack) == x:        
-            self._push_handler(self._not_supposed_to_have_children, True)
+            self._push_handler(self._not_supposed_to_have_children)
 
     
 def Test():
-    x = XmlConfigParser()
-    primo = x.parse_string(test_xml)
-
     
     primo = Primo()
     p = Process(primo)
@@ -462,7 +474,14 @@ def Test():
     primo.run()
 
 def main():
-    Test()
+    x = XmlConfigParser()
+    primo = x.parse_file(sys.argv[1])
+
+    for p in primo.processes:
+        print pprint( (p, p.listeners) )
+
+    print 'running...'
+    primo.run()    
 
 if __name__ == '__main__':
     main()

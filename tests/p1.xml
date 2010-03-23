@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<Primo>
+ <GlobalListeners>
+  <EventLogger/>
+  <OnEvent event="after_attach" action="{process.Start()}"/>
+ </GlobalListeners>
+ 
+ <Process path="c:\windows" bin="notepad.exe">
+  <OnEvent event="after_finish" action="{process.Start()}"/>
+  <KillOnDetach/>
+ </Process>
+ 
+ <Process path="c:\windows" bin="regedit.exe"/>
+ 
+</Primo>
