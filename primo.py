@@ -5,6 +5,8 @@ import sys
 import functools
 import traceback
 import xml.sax
+import datetime
+import time
 from heapq import heappop, heappush
 from pprint import pprint
 
@@ -31,7 +33,7 @@ class Process(object):
         self.listeners = []
 
         #
-        # TODO: stdin/stdout *should* be buffered so all plugins can
+        # TODO: stdin/stdout *should* be buffered so all listeners can
         # access it
         #
         self.process_obj = None
@@ -131,7 +133,7 @@ class Primo(object):
         self.initialize_global_listeners()
 
     def initialize_global_listeners(self):
-        self.add_global_listener(FinishMonitorPlugin)
+        self.add_global_listener(FinishMonitorListener)
 
     #@warn_if_dying
     def add_global_listener(self, listener):
@@ -142,16 +144,20 @@ class Primo(object):
         self.processes.append(process)
         for c in self.global_listeners:
             process.add_listener(c)
-            
-    def schedule_callback(self, callback, delay):
-        when = time.time() + delay
-        info = ScheduleCallbackInfo(when, callback)
+
+    def schedule_callback_timestamp(self, callback, timestamp):
+        info = ScheduleCallbackInfo(timestamp, callback)
 
         if self.scheduling_log:
             print info
             
         heappush(self.schedule, info)
         return id(info)
+            
+    def schedule_callback(self, callback, delay):
+        timestamp = time.time() + delay
+        return self.schedule_callback_timestamp(callback, timestamp)
+        
 
     def post_global_event(self, event, delay = 0):
         return self.schedule_callback(
@@ -168,8 +174,16 @@ class Primo(object):
             functools.partial(callback, event, self, process),
             delay)
 
+    def post_event_timestamp(self, event, process, callback, timestamp):
+        return self.schedule_callback_timestamp(
+            functools.partial(callback, event, self, process),
+            timestamp)
+
     def post_timer_event(self, process, callback, delay):
         return self.post_event('timer', process, callback, delay)
+
+    def post_timer_event_timestamp(self, process, callback, timestamp):
+        return self.post_event_timestamp('timer', process, callback, timestamp)    
         
     def raise_global_event(self, event, cancel_event = None):
         for p in self.processes:
@@ -246,28 +260,28 @@ class Primo(object):
         self.raise_global_event('before_detach')
 
 '''
-    Here for sake of history. You can do all this stuff using RunCodeOnEventPlugin
+    Here for sake of history. You can do all this stuff using RunCodeOnEventListener
 
 def KillOnDetach(event, primo, process):
     if event == 'before_detach':
         process.KillNow()
         
-def KeepRunningPlugin(event, primo, process):
+def KeepRunningListener(event, primo, process):
     if event == 'after_finish':
         process.Start()
 
-def AutoStartPlugin(event, primo, process):
+def AutoStartListener(event, primo, process):
     if event == 'after_attach':
         process.Start()
 
-def LogEventsPlugin(event, primo, process):
+def LogEventsListener(event, primo, process):
     print 'process "%s", event="%s"' % (process.bin, event)
 
 '''
 
-def FinishMonitorPlugin(event, primo, process):
+def FinishMonitorListener(event, primo, process):
     if event == 'after_start':
-        primo.post_timer_event(process, FinishMonitorPlugin, 1) 
+        primo.post_timer_event(process, FinishMonitorListener, 1) 
         return
 
     elif event == 'timer':
@@ -275,7 +289,7 @@ def FinishMonitorPlugin(event, primo, process):
             primo.raise_process_event('after_finish', process)
             return
 
-        primo.post_timer_event(process, FinishMonitorPlugin, 1)
+        primo.post_timer_event(process, FinishMonitorListener, 1)
 
 class StringCodeAdapter(object):
     def __init__(self, string_code):
@@ -300,7 +314,7 @@ class ProcessMethodAdapter(object):
     def __repr__(self):
         return '<ProcessMethodAdapter method="%s">'% self.process_method
 
-class RunCodeOnEventPlugin(object):
+class RunCodeOnEventListener(object):
     def __init__(self, event_filter, func):
         self.func = func
         if isinstance(event_filter, basestring):
@@ -313,8 +327,38 @@ class RunCodeOnEventPlugin(object):
             return self.func(event, primo, process)
 
     def __repr__(self):
-        return '<RunCodeOnEventPlugin filter="%s", code="%s">'% (self.event_filter, self.func)
+        return '<RunCodeOnEventListener filter="%s", code="%s">'% (self.event_filter, self.func)
 
+class OnSpecificTimeListener(object):
+    def __init__(self, primo, process, time, action):
+        time = datetime.datetime.strptime(time, '%H:%M:%S').time()
+        d = datetime.datetime.now()
+
+        # should schedule today or tomorrow?
+        if time < d.time():
+            d += datetime.timedelta(days=1)
+
+        d = datetime.datetime.combine(d.date(), time)
+        self.datetime = d
+
+        #
+        # the time parameter will shadow the time namespace, so we
+        # need to import the function to avoid name collision. The parameter
+        # be be named 'time' because it must be the same name used in the
+        # xml tag: <OnSpecificTime time="17:30:00" action="{process.Start()}"
+        # 
+        from time import mktime        
+        primo.schedule_callback_timestamp(self, mktime(d.timetuple()))
+
+        action = action.strip(' {}')
+
+        self.code = StringCodeAdapter(action)
+        self.primo = primo
+        self.process = process
+
+    def __call__(self):
+        print 'OnSpecificTime, callback="%s", datetime="%s"' % (self.code, self.datetime)
+        self.code('timer', self.primo, self.process)
 
 
 test_xml = \
@@ -338,14 +382,17 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['GlobalListeners'] = self._GlobalListenersElement
         self.element_handlers['Process'] = self._ProcessElement
         self.element_handlers['OnEvent'] = self._OnEventElement
+        self.element_handlers['OnSpecificTime'] = self._OnSpecificTimeElement
 
         self.listeners = {}
+        
+        
         self.listeners['EventLogger'] = \
-            lambda name, attrs: RunCodeOnEventPlugin(None,
+            lambda name, attrs: RunCodeOnEventListener(None,
                 StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)'))
 
         self.listeners['KillOnDetach'] = \
-            lambda name, attrs: RunCodeOnEventPlugin('before_detach', ProcessMethodAdapter(Process.KillNow)) 
+            lambda name, attrs: RunCodeOnEventListener('before_detach', ProcessMethodAdapter(Process.KillNow)) 
         
         self.context_stack = []
 
@@ -361,6 +408,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         eh = ElementHandlerInfo()
         eh.handler = handler
         self.context_stack.append(eh)
+        return eh
 
     def _pop_handler(self):
         self.context_stack.pop(-1)
@@ -374,11 +422,18 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
     def _PrimoElement(self, name, attrs):
         self._push_current_handler()
 
+    def _OnSpecificTimeElement(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        return OnSpecificTimeListener(
+            self.primo,
+            process,
+            **dict(zip([str(x) for x in attrs.keys()], attrs.values())))
+
     def _OnEventElement(self, name, attrs):
         event = attrs['event']
         action = attrs['action']
         action = action.strip('{}')
-        return RunCodeOnEventPlugin(event, StringCodeAdapter(action))
+        return RunCodeOnEventListener(event, StringCodeAdapter(action))
         
 
     def _GlobalListenersElement(self, name, attrs):
@@ -403,11 +458,17 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
             if name == 'OnEvent':
                 listener = self._OnEventElement(name, attrs)
             else:
-                listener = self.listeners[name](name, attrs)
+                if name in self.listeners:
+                    listener = self.listeners[name](name, attrs)
+                else:
+                    listener = None
+                    self.element_handlers[name](name, attrs)
+                    
+            if listener:
+                p.add_listener(listener)
 
-            p.add_listener(listener)
-
-        self._push_handler(add_process_listener)            
+        eh = self._push_handler(add_process_listener)
+        eh.process = p
 
     def _SimpleElementRouter(self, name, attrs):
         self.element_handlers[name](name, attrs)
@@ -449,21 +510,21 @@ def Test():
     primo = Primo()
     p = Process(primo)
 
-    primo.add_global_listener(FinishMonitorPlugin)    
+    primo.add_global_listener(FinishMonitorListener)    
 
     # auto start and relauch always
     primo.add_global_listener(
-        RunCodeOnEventPlugin(['after_attach', 'after_finish'],
+        RunCodeOnEventListener(['after_attach', 'after_finish'],
             ProcessMethodAdapter(Process.Start)))
 
     # log all events
     primo.add_global_listener(
-        RunCodeOnEventPlugin(None,
+        RunCodeOnEventListener(None,
             StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)')))
 
     # kill on detach
     primo.add_global_listener(
-        RunCodeOnEventPlugin('before_detach',
+        RunCodeOnEventListener('before_detach',
                              ProcessMethodAdapter(Process.KillNow)))
 
     p.path = 'c:\\windows'

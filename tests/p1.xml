@@ -10,6 +10,10 @@
   <KillOnDetach/>
  </Process>
  
- <Process path="c:\windows" bin="regedit.exe"/>
+ <Process path="c:\windows" bin="regedit.exe">
+  <OnSpecificTime time="16:15:50" action="{process.Kill()}"/>
+  <OnSpecificTime time="16:15:55" action="{process.Start()}"/>
+  <OnSpecificTime time="16:15:56" action="{process.Kill()}"/>
+ </Process>
  
 </Primo>
