@@ -1,7 +1,7 @@
+import sys
 import subprocess
 import time
 import os
-import sys
 import functools
 import traceback
 import xml.sax
@@ -31,6 +31,7 @@ class Process(object):
         self.event_log = []
         self.command_line_parameters = []
         self.listeners = []
+        self.running = False
 
         #
         # TODO: stdin/stdout *should* be buffered so all listeners can
@@ -55,15 +56,20 @@ class Process(object):
         self.process_obj = subprocess.Popen(self.command_line_parameters, executable=command_line)
         
         self.pid = self.process_obj.pid
-        self.stdout = self.process_obj
-        self.stdin = self.process_obj
+        self.stdout = self.process_obj.stdout
+        self.stdin = self.process_obj.stdin
+        self.running = True
 
         self.primo.post_process_event('after_start', self)
 
     def KillNow(self):
+        if not self.running:
+            return
         self.primo.raise_process_event('before_kill', self, 'after_kill_cancel')
 
         self.process_obj.kill()
+
+        self.running = False        
         
         self.primo.post_process_event('after_kill', self)
 
@@ -286,6 +292,7 @@ def FinishMonitorListener(event, primo, process):
 
     elif event == 'timer':
         if process.process_obj and not process.process_obj.poll() == None:
+            process.running = False
             primo.raise_process_event('after_finish', process)
             return
 
@@ -329,37 +336,61 @@ class RunCodeOnEventListener(object):
     def __repr__(self):
         return '<RunCodeOnEventListener filter="%s", code="%s">'% (self.event_filter, self.func)
 
+class EachXSecondsListener(object):
+    def __init__(self, primo, process, interval, action):
+        self.primo = primo
+        self.process = process
+        self.interval = float(interval)
+        self.action = action
+
+        action = action.strip(' {}')
+        self.code = StringCodeAdapter(action)        
+        
+        self._schedule()
+
+    def _schedule(self):
+        self.primo.post_timer_event(self.process, self, self.interval)
+
+    def __call__(self, action, primo, process):
+        print 'EachXSeconds, callback="%s", interval="%0.2f"' % (self.code, self.interval)
+        self.code('timer', primo, process)
+        self._schedule()
+        
+
 class OnSpecificTimeListener(object):
     def __init__(self, primo, process, time, action):
-        time = datetime.datetime.strptime(time, '%H:%M:%S').time()
+        self.primo = primo
+        self.process = process
+        self.time = datetime.datetime.strptime(time, '%H:%M:%S').time()
+        self.action = action
+
+        action = action.strip(' {}')
+        self.code = StringCodeAdapter(action)        
+        
+        self._schedule()
+
+    def _schedule(self):
         d = datetime.datetime.now()
 
         # should schedule today or tomorrow?
-        if time < d.time():
+        if self.time < d.time():
             d += datetime.timedelta(days=1)
 
-        d = datetime.datetime.combine(d.date(), time)
+        d = datetime.datetime.combine(d.date(), self.time)
         self.datetime = d
 
-        #
-        # the time parameter will shadow the time namespace, so we
-        # need to import the function to avoid name collision. The parameter
-        # be be named 'time' because it must be the same name used in the
-        # xml tag: <OnSpecificTime time="17:30:00" action="{process.Start()}"
-        # 
-        from time import mktime        
-        primo.schedule_callback_timestamp(self, mktime(d.timetuple()))
-
-        action = action.strip(' {}')
-
-        self.code = StringCodeAdapter(action)
-        self.primo = primo
-        self.process = process
+        self.primo.schedule_callback_timestamp(self, time.mktime(d.timetuple()))
 
     def __call__(self):
         print 'OnSpecificTime, callback="%s", datetime="%s"' % (self.code, self.datetime)
         self.code('timer', self.primo, self.process)
 
+        #
+        # reschedule. We *assuming* this callback will never be called
+        # before the specified time
+        #
+        assert(datetime.datetime.now().time() > self.time)
+        self._schedule()
 
 test_xml = \
 '''
@@ -383,6 +414,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['Process'] = self._ProcessElement
         self.element_handlers['OnEvent'] = self._OnEventElement
         self.element_handlers['OnSpecificTime'] = self._OnSpecificTimeElement
+        self.element_handlers['EachXSeconds'] = self._OnEachXSecondsElement
 
         self.listeners = {}
         
@@ -428,6 +460,13 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
             self.primo,
             process,
             **dict(zip([str(x) for x in attrs.keys()], attrs.values())))
+
+    def _OnEachXSecondsElement(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        return EachXSecondsListener(
+            self.primo,
+            process,
+            **dict(zip([str(x) for x in attrs.keys()], attrs.values())))    
 
     def _OnEventElement(self, name, attrs):
         event = attrs['event']
@@ -535,6 +574,10 @@ def Test():
     primo.run()
 
 def main():
+    if len(sys.argv) < 2:
+        print 'usage: primo.py [config file]'
+        return
+    
     x = XmlConfigParser()
     primo = x.parse_file(sys.argv[1])
 

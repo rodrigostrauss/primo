@@ -6,14 +6,14 @@
  </GlobalListeners>
  
  <Process path="c:\windows" bin="notepad.exe">
-  <OnEvent event="after_finish" action="{process.Start()}"/>
+  <EachXSeconds interval="0.5" action="{process.Start() if not process.running else process.Kill()}"/>
   <KillOnDetach/>
  </Process>
  
  <Process path="c:\windows" bin="regedit.exe">
-  <OnSpecificTime time="16:15:50" action="{process.Kill()}"/>
-  <OnSpecificTime time="16:15:55" action="{process.Start()}"/>
-  <OnSpecificTime time="16:15:56" action="{process.Kill()}"/>
+  <OnSpecificTime time="15:34:30" action="{process.Kill()}"/>
+  <OnSpecificTime time="15:34:35" action="{process.Start()}"/>
+  <OnSpecificTime time="15:34:36" action="{process.Kill()}"/>
  </Process>
  
 </Primo>
