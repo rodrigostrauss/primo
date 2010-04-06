@@ -49,11 +49,13 @@ class Process(object):
     def StartNow(self):
         command_line = path_join(self.path, self.bin).encode(sys.getfilesystemencoding())
         
-        params = ' '.join(self.command_line_parameters)
+        args = []
+        args.append(command_line)
+        args.extend(self.command_line_parameters)
 
         self.primo.raise_process_event('before_start', self, 'after_start_cancel')
 
-        self.process_obj = subprocess.Popen(self.command_line_parameters, executable=command_line)
+        self.process_obj = subprocess.Popen(args)
         
         self.pid = self.process_obj.pid
         self.stdout = self.process_obj.stdout
@@ -406,6 +408,31 @@ test_xml = \
 </Primo>
 '''
 
+def SplitCodeSections(s):
+    '''
+        >>> primo.SplitCodeSections('{lala} abc {123} wer  {xpto}')
+        ['{lala}', ' abc ', '{123}', ' wer  ', '{xpto}']
+    '''
+    ret = []
+    cur = 0
+    while 1:
+        code_start = s.find('{', cur)
+        if code_start != -1:
+            if cur != code_start:
+                ret.append(s[cur:code_start])
+            code_end = s.find('}', code_start + 1)
+            assert code_end != -1
+            ret.append(s[code_start:code_end+1])
+            cur = code_end + 1
+        else:
+            if cur != len(s):
+                ret.append(s[cur:])
+            break
+
+    return ret
+            
+            
+
 class XmlConfigParser(xml.sax.handler.ContentHandler):
     def __init__(self):
         self.element_handlers = {}
@@ -415,6 +442,8 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['OnEvent'] = self._OnEventElement
         self.element_handlers['OnSpecificTime'] = self._OnSpecificTimeElement
         self.element_handlers['EachXSeconds'] = self._OnEachXSecondsElement
+        self.element_handlers['CommandLineAdd'] = self._CommandLineAddElement
+        self.element_handlers['Parameters'] = self._ParametersElement
 
         self.listeners = {}
         
@@ -429,6 +458,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.context_stack = []
 
         self.primo = None
+        self.parameters = {}
 
     def _push_current_handler(self):
         self._push_handler(self.context_stack[-1].handler)
@@ -456,17 +486,57 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def _OnSpecificTimeElement(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
+
+        attrs2 = {}
+        # 'action' is always code run on runtime, not on config read
+        for key, value in attrs.items():
+            attrs2[str(key)] = self.EmbeddedCodeProcessor(value) if key != 'action' else value
+            
         return OnSpecificTimeListener(
             self.primo,
             process,
-            **dict(zip([str(x) for x in attrs.keys()], attrs.values())))
+            **attrs2)
 
     def _OnEachXSecondsElement(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
+
+        attrs2 = {}
+        # 'action' is always code run on runtime, not on config read
+        for key, value in attrs.items():
+            attrs2[str(key)] = self.EmbeddedCodeProcessor(value) if key != 'action' else value
+            
         return EachXSecondsListener(
             self.primo,
             process,
-            **dict(zip([str(x) for x in attrs.keys()], attrs.values())))    
+            **attrs2)
+
+    def _ParametersElement(self, name, attrs):
+        def add_parameter(name, attrs):
+            assert name == 'Parameter'
+            self.parameters[attrs['name']] = self.EmbeddedCodeProcessor(attrs['value'])
+                
+        self._push_handler(add_parameter)
+
+    def EmbeddedCodeProcessor(self, s):
+        globals = {}
+        globals['primo'] = self.primo
+        globals['process'] = getattr(self.context_stack[-1], 'process', None)
+        globals.update(self.parameters)
+
+        ret = ''
+
+        for x in SplitCodeSections(s):
+            if x[0] == '{':
+                ret += eval(x.strip('{}'), globals)
+            else:
+                ret += x
+
+        return ret                
+
+    def _CommandLineAddElement(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        assert process
+        process.command_line_parameters.append(self.EmbeddedCodeProcessor(attrs['value']))
 
     def _OnEventElement(self, name, attrs):
         event = attrs['event']
@@ -488,8 +558,8 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def _ProcessElement(self, name, attrs):
         p = Process(self.primo)
-        p.path = attrs['path']
-        p.bin = attrs['bin']
+        p.path = self.EmbeddedCodeProcessor(attrs['path'])
+        p.bin = self.EmbeddedCodeProcessor(attrs['bin'])
 
         self.primo.add_process(p)
 

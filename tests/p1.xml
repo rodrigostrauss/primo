@@ -5,12 +5,20 @@
   <OnEvent event="after_attach" action="{process.Start()}"/>
  </GlobalListeners>
  
- <Process path="c:\windows" bin="notepad.exe">
-  <EachXSeconds interval="0.5" action="{process.Start() if not process.running else process.Kill()}"/>
+ <Parameters>
+  <Parameter name="windows_path" value="c:\windows"/>
+  <Parameter name="system32_path" value="{windows_path}\system32"/>
+  <Parameter name="txt_file" value="{system32_path}\eula.txt"/>
+  <Parameter name="interval" value="2"/>
+ </Parameters>
+ 
+ <Process path="{windows_path}" bin="notepad.exe">
+   <CommandLineAdd value="{txt_file}"/>
+   <EachXSeconds interval="{interval}" action="{process.Start() if not process.running else process.Kill()}"/>
   <KillOnDetach/>
  </Process>
  
- <Process path="c:\windows" bin="regedit.exe">
+ <Process path="{windows_path}" bin="regedit.exe">
   <OnSpecificTime time="15:34:30" action="{process.Kill()}"/>
   <OnSpecificTime time="15:34:35" action="{process.Start()}"/>
   <OnSpecificTime time="15:34:36" action="{process.Kill()}"/>
