@@ -1,3 +1,4 @@
+#!/usr/bin/python
 import sys
 import subprocess
 import time
@@ -48,15 +49,15 @@ class Process(object):
         self.listeners.append(c)
 
     def StartNow(self):
-        command_line = path_join(self.path, self.bin).encode(sys.getfilesystemencoding())
+        bin = path_join(self.path, self.bin).encode(sys.getfilesystemencoding())
         
         args = []
-        args.append(command_line)
-        args.extend(self.command_line_parameters)
+        args.append(bin)
+        for x in self.command_line_parameters: args.extend(x.split(' '))
 
         self.primo.raise_process_event('before_start', self, 'after_start_cancel')
 
-        self.process_obj = subprocess.Popen(args)
+        self.process_obj = subprocess.Popen(args, executable=bin)
         
         self.pid = self.process_obj.pid
         self.stdout = self.process_obj.stdout
@@ -578,7 +579,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def _ProcessElement(self, name, attrs):
         p = Process(self.primo)
-        p.path = self.EmbeddedCodeProcessor(attrs['path'])
+        p.path = self.EmbeddedCodeProcessor(attrs['path']) if 'path' in attrs else ''
         p.bin = self.EmbeddedCodeProcessor(attrs['bin'])
         if 'id' in attrs:
             p.id = self.EmbeddedCodeProcessor(attrs['id'])
