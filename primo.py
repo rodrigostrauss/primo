@@ -32,6 +32,7 @@ class Process(object):
         self.command_line_parameters = []
         self.listeners = []
         self.running = False
+        self.id = None
 
         #
         # TODO: stdin/stdout *should* be buffered so all listeners can
@@ -132,7 +133,7 @@ class warn_if_dying(object):
 
 class Primo(object):
     def __init__(self):
-        self.processes = []
+        self.processes = {}
         self.properties = {}
         self.schedule = []
         self.global_listeners = []
@@ -149,7 +150,11 @@ class Primo(object):
 
     #@warn_if_dying    
     def add_process(self, process):
-        self.processes.append(process)
+        if process.id is None:
+            process.id = process.bin + '_' + str(len(self.processes))
+
+        self.processes[process.id] = process
+
         for c in self.global_listeners:
             process.add_listener(c)
 
@@ -194,7 +199,7 @@ class Primo(object):
         return self.post_event_timestamp('timer', process, callback, timestamp)    
         
     def raise_global_event(self, event, cancel_event = None):
-        for p in self.processes:
+        for p in self.processes.itervalues():
             self.raise_process_event(event, p, cancel_event)
             
     def raise_process_event(self, event, process, cancel_event = None):
@@ -301,12 +306,18 @@ def FinishMonitorListener(event, primo, process):
         primo.post_timer_event(process, FinishMonitorListener, 1)
 
 class StringCodeAdapter(object):
-    def __init__(self, string_code):
+    def __init__(self, string_code, globals = None):
+        # it will complain about wrong identation if there are spaces in the beggining
+        string_code = string_code.strip(' \t')
+        
         self.func = compile(string_code, '<string>', 'exec')
         self.string_code = string_code
+        self.globals = globals
         
     def __call__(self, event, primo, process):
         globals = {'event': event, 'primo' : primo, 'process' : process, 'ret' : None}
+        if self.globals:
+            globals.update(self.globals)
         exec self.func in globals
         return globals['ret']
 
@@ -444,7 +455,6 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['EachXSeconds'] = self._OnEachXSecondsElement
         self.element_handlers['CommandLineAdd'] = self._CommandLineAddElement
         self.element_handlers['Parameters'] = self._ParametersElement
-
         self.listeners = {}
         
         
@@ -453,7 +463,13 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
                 StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)'))
 
         self.listeners['KillOnDetach'] = \
-            lambda name, attrs: RunCodeOnEventListener('before_detach', ProcessMethodAdapter(Process.KillNow)) 
+            lambda name, attrs: RunCodeOnEventListener('before_detach', ProcessMethodAdapter(Process.KillNow))
+
+        self.listeners['AutoStart'] = \
+            lambda name, attrs: RunCodeOnEventListener('after_attach', ProcessMethodAdapter(Process.Start))
+
+        self.listeners['AutoRestart'] = \
+            lambda name, attrs: RunCodeOnEventListener('after_finish', ProcessMethodAdapter(Process.Start))         
         
         self.context_stack = []
 
@@ -513,7 +529,11 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
     def _ParametersElement(self, name, attrs):
         def add_parameter(name, attrs):
             assert name == 'Parameter'
-            self.parameters[attrs['name']] = self.EmbeddedCodeProcessor(attrs['value'])
+            value = self.EmbeddedCodeProcessor(attrs['value'])
+            # if it looks like a number, we'll assume it's a number
+            if value.isdigit():
+                value = int(value)
+            self.parameters[attrs['name']] = value
                 
         self._push_handler(add_parameter)
 
@@ -527,7 +547,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
         for x in SplitCodeSections(s):
             if x[0] == '{':
-                ret += eval(x.strip('{}'), globals)
+                ret += str(eval(x.strip('{}'), globals))
             else:
                 ret += x
 
@@ -542,7 +562,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         event = attrs['event']
         action = attrs['action']
         action = action.strip('{}')
-        return RunCodeOnEventListener(event, StringCodeAdapter(action))
+        return RunCodeOnEventListener(event, StringCodeAdapter(action, self.parameters))
         
 
     def _GlobalListenersElement(self, name, attrs):
@@ -560,6 +580,8 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         p = Process(self.primo)
         p.path = self.EmbeddedCodeProcessor(attrs['path'])
         p.bin = self.EmbeddedCodeProcessor(attrs['bin'])
+        if 'id' in attrs:
+            p.id = self.EmbeddedCodeProcessor(attrs['id'])
 
         self.primo.add_process(p)
 
@@ -651,8 +673,8 @@ def main():
     x = XmlConfigParser()
     primo = x.parse_file(sys.argv[1])
 
-    for p in primo.processes:
-        print pprint( (p, p.listeners) )
+    for id, p in primo.processes.iteritems():
+        print pprint( (id, p, p.listeners, x.parameters) )
 
     print 'running...'
     primo.run()    
