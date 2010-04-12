@@ -26,4 +26,12 @@
   <OnEvent event="after_finish" action="{ primo.processes[after_regedit].Start() }"/>
  </Process>
  
+ <Process path="{system32_path}" bin="cmd.exe" id="cmd">
+  <AutoStart/>
+  <CommandLineAdd value="/q"/>
+  <CommandLineAdd value="/c pause"/>
+ </Process>
+ 
+ 
+ 
 </Primo>

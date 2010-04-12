@@ -39,6 +39,9 @@ class Process(object):
         # TODO: stdin/stdout *should* be buffered so all listeners can
         # access it
         #
+        self.stdout_dst = None
+        self.stdin_src = None
+        
         self.process_obj = None
         self.primo = primo
 
@@ -48,6 +51,12 @@ class Process(object):
     def add_listener(self, c):
         self.listeners.append(c)
 
+    def setup_stdin(self, stream):
+        self.stdin_src = stream
+
+    def setup_stdout(self, stream):
+        self.stdout_dst = stream        
+
     def StartNow(self):
         bin = path_join(self.path, self.bin).encode(sys.getfilesystemencoding())
         
@@ -55,16 +64,54 @@ class Process(object):
         args.append(bin)
         for x in self.command_line_parameters: args.extend(x.split(' '))
 
+        _in, _out = None, None
+        #
+        # In Windows, I got an error trying to write to stdin but not reading the stdout:
+        #   File "C:\Python26\lib\subprocess.py", line 761, in _make_inheritable
+        #       DUPLICATE_SAME_ACCESS)
+        #       WindowsError: (6, 'Invalid identifier')
+        #
+        if self.stdin_src:
+            _in = subprocess.PIPE
+            _out = subprocess.PIPE
+
+        if self.stdout_dst:
+            _out = subprocess.PIPE
+       
         self.primo.raise_process_event('before_start', self, 'after_start_cancel')
 
-        self.process_obj = subprocess.Popen(args, executable=bin)
+        self.process_obj = subprocess.Popen(args, executable=bin, stdin=_in, stdout=_out)
+
+        # TODO: everything here is kept in memory during the operation
+        # TODO: this will lock primo, should be done in a separated thread
+        
+        if _in:
+            # TODO: we're ignoring stderr
+            ret = self.process_obj.communicate(self.stdin_src.read())[0]
+            if self.stdout_dst:
+                self.stdout_dst.write(ret)
+        elif _out:
+            while 1:
+                ret = self.process_obj.stdout.read()
+
+                if not ret:
+                    if self.process_obj.poll() != None:
+                        break
+                    else:
+                        time.sleep(0.5) # TODO: hardcoded timer
+
+                self.stdout_dst.write(ret)
+
+        if self.stdin_src: self.stdin_src.close()
+        if self.stdout_dst: self.stdout_dst.close()       
         
         self.pid = self.process_obj.pid
-        self.stdout = self.process_obj.stdout
-        self.stdin = self.process_obj.stdin
-        self.running = True
+        self.running = self.process_obj.poll() == None
 
         self.primo.post_process_event('after_start', self)
+
+        if not self.running:
+            self.primo.post_process_event('after_finish', self)
 
     def KillNow(self):
         if not self.running:
@@ -132,6 +179,10 @@ class warn_if_dying(object):
         return self.x(*args, **kwargs)
 '''
 
+class PrimoStop(Exception):
+    def __init__(self):
+        pass
+
 class Primo(object):
     def __init__(self):
         self.processes = {}
@@ -141,6 +192,12 @@ class Primo(object):
         self.scheduling_log = False
         self.dying = False
         self.initialize_global_listeners()
+
+    def Stop(self):
+        self.schedule_callback(self.StopNow, 0)
+
+    def StopNow(self):
+        raise PrimoStop()
 
     def initialize_global_listeners(self):
         self.add_global_listener(FinishMonitorListener)
@@ -234,10 +291,11 @@ class Primo(object):
     def run(self):
         self.post_global_event('after_attach')
 
-        max_sleep = 5        
+        max_sleep = 5
+        self.dying = False
+        
         #
-        # main loop. Main tasks:
-        # * call schedule listeners. 
+        # main loop
         #
         while 1:
             try:
@@ -245,6 +303,10 @@ class Primo(object):
                     c = heappop(self.schedule)
                     try:
                         c.callback()
+                    except PrimoStop, ex:
+                        print 'primo.Stop() called'
+                        self.dying = True
+                        break
                     except Exception, ex:
                         print 'exception on main loop: %s' % (repr(ex),)
                     
@@ -260,13 +322,14 @@ class Primo(object):
                 time_to_next = min( (time_to_next, max_sleep) )
 
                 time.sleep(time_to_next)                
-                
             except BaseException, ex:
                 print 'exception on main loop: %s' % (repr(ex),)
+                self.dying = True
                 break
 
+            if self.dying:
+                break
 
-        self.dying = True            
 
         #
         # MUST be a raise, we're already out of run loop
@@ -456,6 +519,8 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['EachXSeconds'] = self._OnEachXSecondsElement
         self.element_handlers['CommandLineAdd'] = self._CommandLineAddElement
         self.element_handlers['Parameters'] = self._ParametersElement
+        self.element_handlers['StdinFromFile'] = self._StdinFromFile
+        self.element_handlers['StdoutToFile'] = self._StdoutToFile
         self.listeners = {}
         
         
@@ -498,6 +563,32 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
     #
     # Element handlers
     #
+    def _StdinFromFile(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        assert process
+
+        path = self.EmbeddedCodeProcessor(attrs['path'])
+        mode = 'rb'
+
+        f = file(path, mode)
+        process.setup_stdin(f)
+
+    def _StdoutToFile(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        assert process
+
+        path = self.EmbeddedCodeProcessor(attrs['path'])        
+
+        # TODO: check invalid modes
+        if 'mode' in attrs and attrs['mode'] == 'append':
+            mode = 'ab'
+        else:
+            mode = 'wb'
+
+        f = file(path, mode)
+        process.setup_stdout(f)        
+                
+        
     def _PrimoElement(self, name, attrs):
         self._push_current_handler()
 
