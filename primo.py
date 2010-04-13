@@ -10,6 +10,7 @@ import datetime
 import time
 from heapq import heappop, heappush
 from pprint import pprint
+import _winreg
 
 
 def path_join(a, *args):
@@ -620,12 +621,23 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def _ParametersElement(self, name, attrs):
         def add_parameter(name, attrs):
-            assert name == 'Parameter'
-            value = self.EmbeddedCodeProcessor(attrs['value'])
+            if name == 'Parameter':
+                value = self.EmbeddedCodeProcessor(attrs['value'])
+            elif name == 'ParameterFromEnvironment':
+                value = os.environ[attrs['varname']]
+            elif name == 'ParameterFromRegistry':
+                k = _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE, attrs['regkey'])
+                value = _winreg.QueryValueEx(k, attrs['regvalue'])[0]
+                value = _winreg.ExpandEnvironmentStrings(value)
+            else:
+                # TODO: better error handling
+                assert False and 'not a valid parameter element'
+
             # if it looks like a number, we'll assume it's a number
             if value.isdigit():
                 value = int(value)
-            self.parameters[attrs['name']] = value
+            self.parameters[attrs['name']] = value                
+                
                 
         self._push_handler(add_parameter)
 
