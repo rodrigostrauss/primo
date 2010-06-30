@@ -36,6 +36,8 @@ class Process(object):
         self.running = False
         self.id = None
 
+        self.environ = os.environ        
+
         #
         # TODO: stdin/stdout *should* be buffered so all listeners can
         # access it
@@ -81,7 +83,7 @@ class Process(object):
        
         self.primo.raise_process_event('before_start', self, 'after_start_cancel')
 
-        self.process_obj = subprocess.Popen(args, executable=bin, stdin=_in, stdout=_out)
+        self.process_obj = subprocess.Popen(args, executable=bin, stdin=_in, stdout=_out, env=self.environ)
 
         # TODO: everything here is kept in memory during the operation
         # TODO: this will lock primo, should be done in a separated thread
@@ -519,6 +521,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['OnSpecificTime'] = self._OnSpecificTimeElement
         self.element_handlers['EachXSeconds'] = self._OnEachXSecondsElement
         self.element_handlers['CommandLineAdd'] = self._CommandLineAddElement
+        self.element_handlers['SetEnvironmentVariable'] = self._SetEnvironmentVariable
         self.element_handlers['Parameters'] = self._ParametersElement
         self.element_handlers['StdinFromFile'] = self._StdinFromFile
         self.element_handlers['StdoutToFile'] = self._StdoutToFile
@@ -661,6 +664,13 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         process = getattr(self.context_stack[-1], 'process', None)
         assert process
         process.command_line_parameters.append(self.EmbeddedCodeProcessor(attrs['value']))
+
+    def _SetEnvironmentVariable(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        assert process
+        var_name = self.EmbeddedCodeProcessor(attrs['name']).encode(sys.getfilesystemencoding())
+        var_value = self.EmbeddedCodeProcessor(attrs['value']).encode(sys.getfilesystemencoding())
+        process.environ[var_name] = var_value
 
     def _OnEventElement(self, name, attrs):
         event = attrs['event']
