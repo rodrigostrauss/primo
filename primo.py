@@ -10,6 +10,7 @@ import datetime
 import time
 from heapq import heappop, heappush
 from pprint import pprint
+from optparse import OptionParser
 import _winreg
 
 
@@ -512,7 +513,7 @@ def SplitCodeSections(s):
             
 
 class XmlConfigParser(xml.sax.handler.ContentHandler):
-    def __init__(self):
+    def __init__(self, cmdline_params):
         self.element_handlers = {}
         self.element_handlers['Primo'] = self._PrimoElement
         self.element_handlers['GlobalListeners'] = self._GlobalListenersElement
@@ -526,6 +527,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['StdinFromFile'] = self._StdinFromFile
         self.element_handlers['StdoutToFile'] = self._StdoutToFile
         self.listeners = {}
+        self.cmdline_params = cmdline_params
         
         
         self.listeners['EventLogger'] = \
@@ -628,10 +630,21 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
                 value = self.EmbeddedCodeProcessor(attrs['value'])
             elif name == 'ParameterFromEnvironment':
                 value = os.environ[attrs['varname']]
+            elif name == 'ParameterFromCommandLine':
+                name = attrs['name']
+                if name in self.cmdline_params:
+                    value = self.cmdline_params[name]
+                else:
+                    value = attrs['default']
             elif name == 'ParameterFromRegistry':
-                k = _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE, attrs['regkey'])
-                value = _winreg.QueryValueEx(k, attrs['regvalue'])[0]
-                value = _winreg.ExpandEnvironmentStrings(value)
+                if sys.platform == 'win32':
+                    k = _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE, attrs['regkey'])
+                    value = _winreg.QueryValueEx(k, attrs['regvalue'])[0]
+                    value = _winreg.ExpandEnvironmentStrings(value)
+                else:
+                    print >> sys.stderr, \
+                    'WARNING: ParameterFromRegistry tag is support only on Windows, ' + \
+                    "for obvious reasons. I\'m *ignoring* it."
             else:
                 # TODO: better error handling
                 assert False and 'not a valid parameter element'
@@ -779,17 +792,33 @@ def Test():
 
     primo.run()
 
+def SetupCommandLine():
+    parser = OptionParser()
+
+    parser.add_option('-d', "--debug", dest="debug", action='store_true', default=False)
+
+    parser.add_option("--parameter", dest="parameters", action='append',
+                      help="parameter whose value can be retrivied inside the config file using the ParameterFromCommandLine tag")
+    return parser    
+
 def main():
-    if len(sys.argv) < 2:
-        print 'usage: primo.py [config file]'
-        return
+    options, args = SetupCommandLine().parse_args()
+
+    #
+    # option must respect syntax name=value, like
+    # primo.py test.xml --parameter xpto=10 --parameter foo=bar
+    #
+    if options.parameters:
+        cmdline_params = dict([x.split('=') for x in options.parameters])
+    else:
+        cmdline_params = {}
     
-    x = XmlConfigParser()
+    x = XmlConfigParser(cmdline_params)
     primo = x.parse_file(sys.argv[1])
 
-    for id, p in primo.processes.iteritems():
-        print pprint( (id, p, p.listeners, x.parameters) )
-
+    if options.debug:
+        for id, p in primo.processes.iteritems():
+            print pprint( (id, p, p.listeners, x.parameters) )
     print 'running...'
     primo.run()    
 
