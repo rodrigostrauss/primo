@@ -36,6 +36,7 @@ class Process(object):
         self.listeners = []
         self.running = False
         self.id = None
+        self.disabled = False
 
         self.environ = os.environ        
 
@@ -62,7 +63,15 @@ class Process(object):
         self.stdout_dst = stream        
 
     def StartNow(self):
+
+        if self.running:
+            return
+        
         bin = path_join(self.path, self.bin).encode(sys.getfilesystemencoding())
+
+        if self.disabled:
+            print 'Process "%s (%s)" is disabled, can\'t StartNow' % (bin, self.id)
+            return
         
         args = []
         args.append(bin)
@@ -233,7 +242,6 @@ class Primo(object):
         timestamp = time.time() + delay
         return self.schedule_callback_timestamp(callback, timestamp)
         
-
     def post_global_event(self, event, delay = 0):
         return self.schedule_callback(
             functools.partial(self.raise_global_event, event),
@@ -374,7 +382,7 @@ def FinishMonitorListener(event, primo, process):
         primo.post_timer_event(process, FinishMonitorListener, 1)
 
 class StringCodeAdapter(object):
-    def __init__(self, string_code, globals = None):
+    def __init__(self, globals, string_code):
         # it will complain about wrong identation if there are spaces in the beggining
         string_code = string_code.strip(' \t')
         
@@ -418,14 +426,14 @@ class RunCodeOnEventListener(object):
         return '<RunCodeOnEventListener filter="%s", code="%s">'% (self.event_filter, self.func)
 
 class EachXSecondsListener(object):
-    def __init__(self, primo, process, interval, action):
+    def __init__(self, globals, primo, process, interval, action):
         self.primo = primo
         self.process = process
         self.interval = float(interval)
         self.action = action
 
         action = action.strip(' {}')
-        self.code = StringCodeAdapter(action)        
+        self.code = StringCodeAdapter(globals, action)
         
         self._schedule()
 
@@ -434,19 +442,20 @@ class EachXSecondsListener(object):
 
     def __call__(self, action, primo, process):
         print 'EachXSeconds, callback="%s", interval="%0.2f"' % (self.code, self.interval)
-        self.code('timer', primo, process)
         self._schedule()
+        self.code('timer', primo, process)
+        
         
 
 class OnSpecificTimeListener(object):
-    def __init__(self, primo, process, time, action):
+    def __init__(self, globals, primo, process, time, action):
         self.primo = primo
         self.process = process
         self.time = datetime.datetime.strptime(time, '%H:%M:%S').time()
         self.action = action
 
         action = action.strip(' {}')
-        self.code = StringCodeAdapter(action)        
+        self.code = StringCodeAdapter(globals, action)
         
         self._schedule()
 
@@ -526,13 +535,19 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['Parameters'] = self._ParametersElement
         self.element_handlers['StdinFromFile'] = self._StdinFromFile
         self.element_handlers['StdoutToFile'] = self._StdoutToFile
+        self.element_handlers['PythonCode'] = self._PythonCode
+
+        # this will be filled by globals created by code
+        # in action and in PythonCode sections
+        # The parameters will be inserted to this dict as well
+        self.globals = {}
+        
         self.listeners = {}
         self.cmdline_params = cmdline_params
         
-        
         self.listeners['EventLogger'] = \
             lambda name, attrs: RunCodeOnEventListener(None,
-                StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)'))
+                StringCodeAdapter(self.globals, 'print \'process "%s", event="%s"\' % (process.bin, event)'))
 
         self.listeners['KillOnDetach'] = \
             lambda name, attrs: RunCodeOnEventListener('before_detach', ProcessMethodAdapter(Process.KillNow))
@@ -540,13 +555,35 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.listeners['AutoStart'] = \
             lambda name, attrs: RunCodeOnEventListener('after_attach', ProcessMethodAdapter(Process.Start))
 
+        class AutoRestart(object):
+            def __init__(self,interval):
+                self.interval = interval
+
+            def __call__(self, event, primo, process):
+                self.process = process
+                self.primo = primo
+                self._schedule()
+
+            def _schedule(self):
+                self.primo.schedule_callback(self.OnTimer, self.interval)
+
+            def OnTimer(self):
+                process = self.process
+
+                self._schedule()                
+                
+                if process.disabled or process.running:
+                    return
+
+                process.Start()
+                
+
         self.listeners['AutoRestart'] = \
-            lambda name, attrs: RunCodeOnEventListener('after_finish', ProcessMethodAdapter(Process.Start))         
+            lambda name, attrs: RunCodeOnEventListener('after_attach', AutoRestart(attrs['interval'] if 'interval' in attrs else 1))
         
         self.context_stack = []
 
         self.primo = None
-        self.parameters = {}
 
     def _push_current_handler(self):
         self._push_handler(self.context_stack[-1].handler)
@@ -579,6 +616,9 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         f = file(path, mode)
         process.setup_stdin(f)
 
+    def _PythonCode(self, name, attrs):
+        pass
+
     def _StdoutToFile(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
         assert process
@@ -607,6 +647,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
             attrs2[str(key)] = self.EmbeddedCodeProcessor(value) if key != 'action' else value
             
         return OnSpecificTimeListener(
+            self.globals,
             self.primo,
             process,
             **attrs2)
@@ -620,6 +661,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
             attrs2[str(key)] = self.EmbeddedCodeProcessor(value) if key != 'action' else value
             
         return EachXSecondsListener(
+            self.globals,
             self.primo,
             process,
             **attrs2)
@@ -652,22 +694,25 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
             # if it looks like a number, we'll assume it's a number
             if value.isdigit():
                 value = int(value)
-            self.parameters[attrs['name']] = value                
+
+            # parameters will be added to this dict which is used
+            # as "globals" for every code run by primo
+            self.globals[attrs['name']] = value                
                 
                 
         self._push_handler(add_parameter)
 
     def EmbeddedCodeProcessor(self, s):
-        globals = {}
-        globals['primo'] = self.primo
-        globals['process'] = getattr(self.context_stack[-1], 'process', None)
-        globals.update(self.parameters)
+        eval_globals = {}
+        eval_globals['primo'] = self.primo
+        eval_globals['process'] = getattr(self.context_stack[-1], 'process', None)
+        eval_globals.update(self.globals)
 
         ret = ''
 
         for x in SplitCodeSections(s):
             if x[0] == '{':
-                ret += str(eval(x.strip('{}'), globals))
+                ret += str(eval(x.strip('{}'), eval_globals))
             else:
                 ret += x
 
@@ -689,7 +734,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         event = attrs['event']
         action = attrs['action']
         action = action.strip('{}')
-        return RunCodeOnEventListener(event, StringCodeAdapter(action, self.parameters))
+        return RunCodeOnEventListener(event, StringCodeAdapter(self.globals, action))
         
 
     def _GlobalListenersElement(self, name, attrs):
@@ -748,23 +793,43 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self._push_handler(self._SimpleElementRouter)
 
     def endElement(self, name):
-        #if self.context_stack[-1].pop_on_end:
-        self._pop_handler()
+        if self.python_code:
+            code = self.current_python_code.strip('\t \r\n')
 
-    def _not_supposed_to_have_children(self, name, attrs):
-        assert False
+            #
+            # The code will be executed now, so it'll probably be used
+            # define variables and functions, and not to run any code
+            #
+            exec code in self.globals
+            
+            self.python_code = False
+            self.current_python_code = ''
+            
+        self._pop_handler()
         
     def startElement(self, name, attrs):
         x = len(self.context_stack)
+
+        # TODO: this is ugly UGLY **** UGLY ***
+        self.python_code = (name == 'PythonCode')
+
+        if self.python_code:
+            self.current_python_code = ''
         
         self._call_current_handler(name, attrs)
 
         if len(self.context_stack) == x:        
             self._push_handler(self._not_supposed_to_have_children)
 
+    def characters(self, content):
+        if self.python_code:
+            self.current_python_code += content
+
+    def _not_supposed_to_have_children(self, name, attrs):
+        assert False
+
     
 def Test():
-    
     primo = Primo()
     p = Process(primo)
 
@@ -778,7 +843,7 @@ def Test():
     # log all events
     primo.add_global_listener(
         RunCodeOnEventListener(None,
-            StringCodeAdapter('print \'process "%s", event="%s"\' % (process.bin, event)')))
+            StringCodeAdapter(globals(), 'print \'process "%s", event="%s"\' % (process.bin, event)')))
 
     # kill on detach
     primo.add_global_listener(
@@ -799,9 +864,16 @@ def SetupCommandLine():
 
     parser.add_option("--parameter", dest="parameters", action='append',
                       help="parameter whose value can be retrivied inside the config file using the ParameterFromCommandLine tag")
-    return parser    
+    return parser
+
+def usage():
+    print 'usage: primo.py [xml config file]'
 
 def main():
+    if len(sys.argv) < 2:
+        usage()
+        return 
+    
     options, args = SetupCommandLine().parse_args()
 
     #
