@@ -11,7 +11,9 @@ import time
 from heapq import heappop, heappush
 from pprint import pprint
 from optparse import OptionParser
-import _winreg
+
+if sys.platform == 'win32':
+    import _winreg
 
 
 def path_join(a, *args):
@@ -541,6 +543,8 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         # in action and in PythonCode sections
         # The parameters will be inserted to this dict as well
         self.globals = {}
+	self.globals['sys'] = sys
+	self.globals['os'] = os
         
         self.listeners = {}
         self.cmdline_params = cmdline_params
