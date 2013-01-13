@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<Primo>
+
+ <GlobalListeners>
+  <EventLogger/>
+  <KillOnDetach/>
+ </GlobalListeners>
+ 
+ <Parameters>
+  <Parameter name="windows_path" value="c:\windows"/>
+  <Parameter name="system32_path" value="{windows_path}\system32"/>
+  <Parameter name="cygwin_path" value="c:\cygwin\bin"/>
+  <Parameter name="txt_file" value="{system32_path}\eula.txt"/>
+ </Parameters>
+ 
+ <Process path="{cygwin_path}" bin="grep.exe" id="grep_stdin_stdout">
+  <CommandLineAdd value="-i"/>
+  <CommandLineAdd value="Microsoft"/>
+  <StdinFromFile path="{txt_file}"/>
+  <StdoutToFile path="c:\temp\{txt_file[txt_file.rfind('\\')+1:]}" mode="append"/>
+  <AutoStart/>
+ </Process>
+ 
+ <Process path="{cygwin_path}" bin="grep.exe" id="grep_stdin">
+  <CommandLineAdd value="-i"/>
+  <CommandLineAdd value="Microsoft"/>
+  <StdinFromFile path="{txt_file}"/>
+  <AutoStart/>
+ </Process>
+ 
+ <Process path="{cygwin_path}" bin="grep.exe" id="grep_stdout">
+  <CommandLineAdd value="-i"/>
+  <CommandLineAdd value="Microsoft"/>
+  <CommandLineAdd value="{txt_file}"/>
+  <StdoutToFile path="c:\temp\eula2.txt"/>
+  <AutoStart/>
+  
+  <OnEvent event="after_finish" action="{ primo.Stop() }"/>
+ </Process>
+
+  
+</Primo>

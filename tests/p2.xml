@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<Primo>
+
+ <GlobalListeners>
+  <EventLogger/>
+  <KillOnDetach/>
+ </GlobalListeners>
+ 
+ <Parameters>
+  <ParameterFromEnvironment name="windows_path" varname="WINDIR"/>
+  <ParameterFromRegistry name="xpto" regkey="Software\Microsoft\Windows\CurrentVersion" regvalue="WallPaperDir"/> 
+  <Parameter name="system32_path" value="{windows_path}\system32"/>
+  <Parameter name="txt_file" value="{system32_path}\eula.txt"/>
+  <Parameter name="interval" value="1"/>
+  
+  <Parameter name="after_notepad" value="regedit"/>
+  <Parameter name="after_regedit" value="notepad"/>
+ </Parameters>
+ 
+ <Process path="{windows_path}" bin="notepad.exe" id="notepad">
+  <CommandLineAdd value="{txt_file}"/>
+  <AutoStart/>
+  <OnEvent event="after_finish" action="{ primo.processes[after_notepad].Start() }"/>
+ </Process>
+ 
+ <Process path="{windows_path}" bin="regedit.exe" id="regedit">
+  <OnEvent event="after_finish" action="{ primo.processes[after_regedit].Start() }"/>
+ </Process>
+ 
+ <Process path="{system32_path}" bin="cmd.exe" id="cmd">
+  <AutoStart/>
+  <CommandLineAdd value="/q"/>
+  <CommandLineAdd value="/c pause"/>
+ </Process>
+ 
+ 
+ 
+</Primo>

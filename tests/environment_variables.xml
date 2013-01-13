@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<Primo>
+
+ <GlobalListeners>
+  <EventLogger/>
+  <KillOnDetach/>
+ </GlobalListeners>
+ 
+ <Parameters>
+  <ParameterFromEnvironment name="windows_path" varname="WINDIR"/>
+  <Parameter name="system32_path" value="{windows_path}\system32"/>
+ </Parameters>
+  
+ <Process path="{system32_path}" bin="cmd.exe" id="cmd">
+  <SetEnvironmentVariable name="__XPTO" value="{system32_path}"/>
+  <AutoStart/>
+  <CommandLineAdd value="/q"/>
+  <CommandLineAdd value="/c SET &amp;&amp; pause"/>
+ </Process>
+ 
+ 
+</Primo>

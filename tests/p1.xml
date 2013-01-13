@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<Primo>
+
+ <Parameters>
+  <Parameter name="p1" value="!"/>
+</Parameters>
+ 
+ <PythonCode>
+  <![CDATA[
+
+# parameters declared BEFORE PythonCode section
+# must be available in the global scope
+print p1
+
+def xpto(process):
+	print process
+
+  ]]> 
+ </PythonCode>
+ 
+ <GlobalListeners>
+  <EventLogger/>
+  <OnEvent event="after_attach" action="{process.Start()}"/>
+ </GlobalListeners>
+ 
+ <Parameters>
+  <Parameter name="windows_path" value="c:\windows"/>
+ </Parameters>
+ 
+ <Process path="{windows_path}" bin="notepad.exe">
+  <EachXSeconds interval="1" action="{xpto(process)}"/>
+ </Process>
+ 
+</Primo>

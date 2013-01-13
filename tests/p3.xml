@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<Primo>
+
+ <!--
+ <GlobalListeners>
+  <EventLogger/>
+  <KillOnDetach/>
+ </GlobalListeners>
+ -->
+ 
+ <Process bin="ls" id="ls">
+  <CommandLineAdd value="-laF --color"/>
+  <AutoStart/>
+  <EachXSeconds interval="3" action="{process.Start()}"/>
+ </Process>
+ 
+ <Process bin="date">
+  <AutoStart/>
+  <EachXSeconds interval="2" action="{process.Start()}"/>
+ </Process>
+ 
+</Primo>
+
