@@ -450,7 +450,38 @@ class EachXSecondsListener(object):
         print 'EachXSeconds, callback="%s", interval="%0.2f"' % (self.code, self.interval)
         self._schedule()
         self.code('timer', primo, process)
+
+
+class RunningPeriodListener(object):
+    def __init__(self, globals, primo, process, start, end):
+        self.primo = primo
+        self.process = process
+
+        self.start = datetime.datetime.strptime(start, '%H:%M:%S').time()
+        self.end = datetime.datetime.strptime(end, '%H:%M:%S').time()
         
+        self._schedule()
+
+    def _schedule(self):
+        self.primo.post_timer_event(self.process, self, 1)
+
+    def __call__(self, action, primo, process):
+
+        current_time = datetime.datetime.now().time()
+
+        inside_period = (current_time >= self.start and current_time <= self.end)
+
+        
+
+        if inside_period and not self.process.running:
+            print 'inside running period: ', self.start, self.end, current_time
+            self.process.Start()
+
+        if not inside_period and self.process.running:
+            print 'outside running period: ', self.start, self.end, current_time
+            self.process.KillNow()
+                    
+        self._schedule()
         
 
 class OnSpecificTimeListener(object):
@@ -535,6 +566,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         self.element_handlers['Process'] = self._ProcessElement
         self.element_handlers['OnEvent'] = self._OnEventElement
         self.element_handlers['OnSpecificTime'] = self._OnSpecificTimeElement
+        self.element_handlers['RunningPeriod'] = self._RunningPeriod
         self.element_handlers['EachXSeconds'] = self._OnEachXSecondsElement
         self.element_handlers['CommandLineAdd'] = self._CommandLineAddElement
         self.element_handlers['SetEnvironmentVariable'] = self._SetEnvironmentVariable
@@ -659,6 +691,15 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
             self.primo,
             process,
             **attrs2)
+
+    def _RunningPeriod(self, name, attrs):
+        process = getattr(self.context_stack[-1], 'process', None)
+        
+        return RunningPeriodListener(
+            self.globals,
+            self.primo,
+            process,
+            **attrs)
 
     def _OnEachXSecondsElement(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
