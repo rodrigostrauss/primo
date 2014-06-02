@@ -79,8 +79,12 @@ class Process(object):
         args = StringIO()
         args.write(bin)
         args.write(' ')
-        for x in self.command_line_parameters:
-            args.write(x)
+        for arg in self.command_line_parameters:
+            if isinstance(arg, basestring):
+                args.write(arg)
+            else:
+                args.write(arg(self.primo, self))
+                
             args.write(' ')
 
         _in, _out = None, None
@@ -406,6 +410,30 @@ class StringCodeAdapter(object):
     def __repr__(self):
         return '<StringCodeAdapter string_code="%s">'% self.string_code
 
+class EmbeddedCodeAdapter(object):
+    def __init__(self, globals, string_code):
+       self.string_code = string_code.strip(' \t')
+       self.globals = globals
+        
+    def __call__(self, primo, process):
+        globals = {'primo' : primo, 'process' : process}
+        if self.globals:
+            globals.update(self.globals)
+
+        ret = ''
+
+        for x in SplitCodeSections(self.string_code):
+            if x[0] == '{':
+                ret += str(eval(x.strip('{}'), globals))
+            else:
+                ret += x
+
+        return ret                
+
+    def __repr__(self):
+        return '<StringCodeAdapter string_code="%s">'% self.string_code
+
+
 class ProcessMethodAdapter(object):
     def __init__(self, process_method):
         self.process_method = process_method
@@ -470,8 +498,6 @@ class RunningPeriodListener(object):
         current_time = datetime.datetime.now().time()
 
         inside_period = (current_time >= self.start and current_time <= self.end)
-
-        
 
         if inside_period and not self.process.running:
             print 'inside running period: ', self.start, self.end, current_time
@@ -694,12 +720,16 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
 
     def _RunningPeriod(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
+
+        start = self.EmbeddedCodeProcessor(attrs['start'])
+        end = self.EmbeddedCodeProcessor(attrs['end'])
         
         return RunningPeriodListener(
             self.globals,
             self.primo,
             process,
-            **attrs)
+            start,
+            end)
 
     def _OnEachXSecondsElement(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
@@ -778,7 +808,7 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
     def _CommandLineAddElement(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
         assert process
-        process.command_line_parameters.append(self.EmbeddedCodeProcessor(attrs['value']))
+        process.command_line_parameters.append(EmbeddedCodeAdapter(self.globals, attrs['value']))
 
     def _SetEnvironmentVariable(self, name, attrs):
         process = getattr(self.context_stack[-1], 'process', None)
