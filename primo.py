@@ -494,10 +494,13 @@ class RunningPeriodListener(object):
         self.primo.post_timer_event(self.process, self, 1)
 
     def __call__(self, action, primo, process):
-
         current_time = datetime.datetime.now().time()
 
-        inside_period = (current_time >= self.start and current_time <= self.end)
+        if self.start < self.end:
+            inside_period = (current_time >= self.start and current_time <= self.end)
+        else:
+            inside_period = (current_time >= self.start or current_time <= self.end)
+            
 
         if inside_period and not self.process.running:
             print 'inside running period: ', self.start, self.end, current_time

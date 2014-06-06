@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<Primo>
+
+ <PythonCode>
+  <![CDATA[
+
+import datetime
+
+  ]]> 
+ </PythonCode>
+
+ <GlobalListeners>
+  <!-- <EventLogger/> -->
+  <KillOnDetach/>
+ </GlobalListeners>
+ 
+ <Parameters>
+  <Parameter name="log_file_name" value="XXXXX"/>
+  <Parameter name="start_time" value="13:41:30"/>
+	<Parameter name="end_time" value="13:41:20"/>
+  <Parameter name="windows_path" value="c:/windows/system32"/>
+ </Parameters>
+ 
+ <Process path="{windows_path}" bin="notepad.exe" id="cmd">
+  <!-- <CommandLineAdd value="/C echo {datetime.datetime.now().strftime('intelihub_%Y%m%d.log')}"/> -->
+	<RunningPeriod start="{start_time}" end="{end_time}"/>
+ </Process>
+ 
+  
+</Primo>
