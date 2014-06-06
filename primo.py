@@ -11,6 +11,7 @@ import time
 from heapq import heappop, heappush
 from pprint import pprint
 from optparse import OptionParser
+from cStringIO import StringIO
 
 if sys.platform == 'win32':
     import _winreg
@@ -75,9 +76,12 @@ class Process(object):
             print 'Process "%s (%s)" is disabled, can\'t StartNow' % (bin, self.id)
             return
         
-        args = []
-        args.append(bin)
-        for x in self.command_line_parameters: args.extend(x.split(' '))
+        args = StringIO()
+        args.write(bin)
+        args.write(' ')
+        for x in self.command_line_parameters:
+            args.write(x)
+            args.write(' ')
 
         _in, _out = None, None
         #
@@ -95,7 +99,7 @@ class Process(object):
        
         self.primo.raise_process_event('before_start', self, 'after_start_cancel')
 
-        self.process_obj = subprocess.Popen(args, executable=bin, stdin=_in, stdout=_out, env=self.environ)
+        self.process_obj = subprocess.Popen(args.getvalue(), executable=bin, stdin=_in, stdout=_out, env=self.environ)
 
         # TODO: everything here is kept in memory during the operation
         # TODO: this will lock primo, should be done in a separated thread
@@ -543,8 +547,8 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
         # in action and in PythonCode sections
         # The parameters will be inserted to this dict as well
         self.globals = {}
-	self.globals['sys'] = sys
-	self.globals['os'] = os
+        self.globals['sys'] = sys
+        self.globals['os'] = os
         
         self.listeners = {}
         self.cmdline_params = cmdline_params
@@ -696,12 +700,20 @@ class XmlConfigParser(xml.sax.handler.ContentHandler):
                 assert False and 'not a valid parameter element'
 
             # if it looks like a number, we'll assume it's a number
-            if value.isdigit():
-                value = int(value)
+            parameter_type = attrs['type'] if'type' in attrs else 'string'
 
+            if parameter_type == 'string':
+                pass
+            elif parameter_type == 'int':
+                value = int(value)
+            elif parameter_type == 'float':
+                value = float(value)
+            else:
+                raise Exception('Invalid parameter type: ', parameter_type)
+            
             # parameters will be added to this dict which is used
             # as "globals" for every code run by primo
-            self.globals[attrs['name']] = value                
+            self.globals[self.EmbeddedCodeProcessor(attrs['name'])] = value                
                 
                 
         self._push_handler(add_parameter)
@@ -894,7 +906,8 @@ def main():
 
     if options.debug:
         for id, p in primo.processes.iteritems():
-            print pprint( (id, p, p.listeners, x.parameters) )
+            print pprint( (id, p, p.listeners, p.command_line_parameters) )
+
     print 'running...'
     primo.run()    
 
