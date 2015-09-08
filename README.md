@@ -1,13 +1,12 @@
 # Introduction #
-Primo is a process manager. It uses a xml config file where you can specify actions to be executed on process events, like start and stop. Primo is made using pure Python, if you have Python installed, just download [primo.py](http://primo.googlecode.com/hg/primo.py) and you're good to go. It's tested on Windows and Linux (Ubuntu), but it will **probably** run flawlessly on MacOS and different GNU/Linux distributions.
+Primo is a process manager. It uses a xml config file where you can specify actions to be executed on process events, like start and stop. Primo is made using pure Python, if you have Python installed, just download primo.py and you're good to go. It's tested on Windows and Linux (Ubuntu), but it will **probably** run flawlessly on MacOS and different GNU/Linux distributions.
 
 # Details #
 Primo reads an xml file that holds the configuration for a specific scenario. It includes all the processes that will be created and/or managed and all the listeners (more on this in a while).
 
 The following config file will launch notepad, and stop primo when notepad is closed:
 
-```
-
+```xml
 <?xml version="1.0"?>
 <Primo>
  
@@ -24,7 +23,7 @@ The following config file will launch notepad, and stop primo when notepad is cl
 
 ```
 
-Most of this config file seen pretty obvious. You can browse some example files on http://code.google.com/p/primo/source/browse/#hg/tests. Lets dig a little bit more.
+Most of this config file seen pretty obvious. You can browse some example files on the tests directory. Lets dig a little bit more.
 
 # Concepts #
 
@@ -33,7 +32,7 @@ Primo is the name of our process manager, that runs on Windows and Linux. It hol
 ## Parameters and Variable Expansion ##
 Unless you have a very simple scenario (like start a single process using a hard-coded path), most information you will use to start and control processes will be parameters. From the binary path that can change between machines to the number of times a process will be restarted before giving up, using parameters will make you like easier.
 
-```
+```xml
 <Parameters>
   <Parameter name="path" value="/usr/bin"/>
 </Parameters>
@@ -43,7 +42,7 @@ This a simple "Parameters" section, creating just a simple parameter.
 
 When you use {something} syntax, primo will eval "something" as a parameters, runtime variable or even code. Actually, you can use any valid python code that eval()'s to something. Examples:
 
-```
+```xml
 <!-- read parameter from an environment variable and create a "windows_path" parameter -->
 <ParameterFromEnvironment name="windows_path" varname="WINDIR"/>
 
@@ -60,7 +59,7 @@ All expressions are evaluated when the XML tag is read. There's no lazy evaluati
 ## Process ##
 It's an OS process, created by primo. You need to inform at least a path and a binary file name your OS will run (it includes `*`nix files with +x attribute). You can give an id to a process if you want to reference it in the future. The following primo config file will open the file win.ini using the notepad, even if user installed Windows in a different directory:
 
-```
+```xml
 <?xml version="1.0"?>
 <Primo>
 
@@ -82,7 +81,7 @@ The CommandLineAdd element can be added several times if you want. The "AutoStar
 ## Actions ##
 Some tags have an "action" attribute, that specifies a python code to run where that specific event happens. It's different from variable expansion, since it doesn't need to yield a value, it's just code. You can separate statements using a semicolon, just like any Python code. Although it's not recommended to add tons of code to an action element, it's up to you to abuse it or not.
 
-```
+```xml
 <!-- Process will be started again when it finishes (or crashes) -->
 <EventHandler event="after_finish" action="{ process.Start() }"/>
 
@@ -107,7 +106,7 @@ Event names follow the pattern (before|after)`_`(event name). When a listener ha
 ## Timers ##
 You can also use timers to run actions.
 
-```
+```xml
 
 <?xml version="1.0"?>
 <Primo>
@@ -139,7 +138,7 @@ In the above config file, notepad.exe will be started and stopped each 2 seconds
 ## Event Handlers ##
 An event handler contains Python code to run when an event happens. You can register a process event handler or a global one, that will receive events from all process.
 
-```
+```xml
 <?xml version="1.0"?>
 <Primo>
 
